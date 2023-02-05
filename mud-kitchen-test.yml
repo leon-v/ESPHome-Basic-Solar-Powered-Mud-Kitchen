@@ -32,7 +32,7 @@ wifi:
 # Handy for monitoring when starting up. Uses LED built onto the board.
 light:
   - platform: status_led
-    name: "Mud Kitchen Test Status"
+    name: "Mud Kitchen Status"
     pin: GPIO15
     
 # 2X UARTs. One for each relay. The S2 has very good pin mapping for the UART.
