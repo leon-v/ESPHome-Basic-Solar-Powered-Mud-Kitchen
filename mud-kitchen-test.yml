@@ -1,17 +1,17 @@
 esphome:
-  name: mud-kitchen-test
+  name: mud-kitchen
 
 esp32:
-  board: esp32-s2-saola-1
+  board: esp32-s2-saola-1 # Standard ESP32-S2 Board
   framework:
-    type: esp-idf
+    type: esp-idf # platformio doesn't seem to work very well for the S2 as of writing this.
 
 # Enable logging
 logger:
-  hardware_uart: USB_CDC # This is to release a UART for the relays
+  hardware_uart: USB_CDC # This is to release a UART for the relay controller.
 
 # Enable Home Assistant API
-api:
+api: # Usually i'd just ise MQTT, but I have been having good luck with this lately.
 
 ota:
   password: !secret ota_password
@@ -23,16 +23,19 @@ wifi:
 #  - ssid: !secret bp_wifi_ssid
 #    password: !secret bp_wifi_password
 
+# MQTT Disabled so i primerally can use HA API
 #mqtt:
 #  broker: mqtt.valkenb.org
 #  username: !secret mqtt_username
 #  password: !secret mqtt_password
 
+# Handy for monitoring when starting up. Uses LED built onto the board.
 light:
   - platform: status_led
     name: "Mud Kitchen Test Status"
     pin: GPIO15
     
+# 2X UARTs. One for each relay. The S2 has very good pin mapping for the UART.
 uart:
 
   - tx_pin: GPIO09
@@ -45,9 +48,11 @@ uart:
 
 switch:
 
+  # Relay that connects the solar panel to the battery.
+  # I use normally open so all relays can be off while we wait for the sun to come out.
   - platform: template
-    name: 'Mud Kitchen Test Conect Solar Panel'
-    id: conect_solar_panel
+    name: 'Mud Kitchen Connect Solar Panel'
+    id: connect_solar_panel
     optimistic: true
     turn_on_action:
       - uart.write:
@@ -58,8 +63,9 @@ switch:
           id: uart1
           data: [0xA0, 0x01, 0x00, 0xA1]
 
+  # Main power enable for all 12v accessories.
   - platform: template
-    name: 'Mud Kitchen Test Main Power'
+    name: 'Mud Kitchen Main Power'
     id: main_power
     optimistic: true
     turn_on_action:
@@ -71,8 +77,9 @@ switch:
           id: uart1
           data: [0xA0, 0x02, 0x00, 0xA2]
 
+  # Pup to move water from the lower catch tank to the upper gravity feeding tank.
   - platform: template
-    name: 'Mud Kitchen Test Pump'
+    name: 'Mud Kitchen Pump'
     id: pump
     optimistic: true
     turn_on_action:
@@ -84,8 +91,9 @@ switch:
           id: uart2
           data: [0xA0, 0x01, 0x00, 0xA1]
 
+  # Spare relay. Might use for play house fan or lights in the future.
   - platform: template
-    name: 'Mud Kitchen Test Relay 4'
+    name: 'Mud Kitchen Relay 4'
     optimistic: true
     turn_on_action:
       - uart.write:
@@ -97,10 +105,12 @@ switch:
           data: [0xA0, 0x02, 0x00, 0xA2]
 
 sensor:
+
+  # ADC to measure the battery voltage & trigger actions when it changes.
   - platform: adc
     attenuation: 11db
     pin: GPIO3
-    name: "Mud Kitchen Test Battery"
+    name: "Mud Kitchen Battery"
     update_interval: 5ms
     accuracy_decimals: 3
     filters:
@@ -109,21 +119,29 @@ sensor:
           window_size: 400
           send_every: 400
     on_value_range:
-      - above: 10.0 # Provide power to pumps and lights above this.
+
+      # Provide power to pumps and lights above a voltage that indicate the battery is charged enough.
+      - above: 10.0
         then:
           - switch.turn_on: main_power
-      - below: 8.5 # Remove power to pumps and lights under this.
+        
+      # Remove power to pumps and lights under this voltage to prevent damaging discharge.
+      - below: 8.5
         then:
         - switch.turn_off: main_power
         - switch.turn_off: pump
-      - above: 13.5 # Battery is overcharging, disconnecting charge source.
+      
+      # Battery is overcharging, disconnecting charge source.
+      - above: 13.5
         then:
-        - switch.turn_off: conect_solar_panel
-          
+        - switch.turn_off: connect_solar_panel
+
+  # ADC to measure the voltage from the solar panel, mainly used when disconnected from the battery.
+  # NOTE: There is a diode between the solar panel and battery.
   - platform: adc
     attenuation: 11db
     pin: GPIO5
-    name: "Mud Kitchen Test Solar Panel"
+    name: "Mud Kitchen Solar Panel"
     update_interval: 5ms
     accuracy_decimals: 3
     filters:
@@ -132,21 +150,33 @@ sensor:
           window_size: 400
           send_every: 400
     on_value_range:
-      - above: 8 # Charge source has more than this, start charging.
-        then:
-          - switch.turn_on: conect_solar_panel
-      - above: 14 # Charge source has too much power, disconnect. This may need adjusting if we disconnect while we still need power.
-        then:
-        - switch.turn_off: conect_solar_panel
-      - below: 5 # Disconnect charger if we don't have charge power.
-        then:
-        - switch.turn_off: conect_solar_panel
 
-          
+      # Charge source has more than this, start charging.
+      - above: 8
+        then:
+          - switch.turn_on: connect_solar_panel
+      
+      # Charge source has too much power, disconnect. This may need adjusting if we disconnect while we still need power.
+      # So far has been OK, but doesn't look like it has ever happened due to poor battery.
+      - above: 14
+        then:
+        - switch.turn_off: connect_solar_panel
+      
+      # Disconnect charger if we don't have charge power. This also saves charge by not powering the relay.
+      - below: 5
+        then:
+        - switch.turn_off: connect_solar_panel
+
+
+  # ADC to measure the voltage on the reed switch circuit.
+  # One reed switch turns on when the lower catch tank has some water.
+  # The other reed switch turns on when the upper gravity feeding tank is not full.
+  # Relays are connected in series and have a pull down.
+  # This ADC is technically just a binary sensor.
   - platform: adc
     attenuation: 11db
     pin: GPIO7
-    name: "Mud Kitchen Test Level Sensor"
+    name: "Mud Kitchen Level Sensor"
     update_interval: 5ms
     accuracy_decimals: 3
     filters:
@@ -155,18 +185,27 @@ sensor:
           window_size: 400
           send_every: 400
     on_value_range:
-      - above: 8 # Level sensor senses the top tank is low and the bottom one is high
+
+      # Level sensor senses the top tank is low and the bottom one is high.
+      # Turns on the pump if the main power is on.
+      - above: 8
         then:
           if:
             condition:
               switch.is_on: main_power
             then:
               script.execute: limited_time_pump
-      - below: 5 # 
+      
+      # Turns off the pump if either tank is not ready.
+      - below: 5
         then:
         - switch.turn_off: pump
 
+
 script:
+
+  # To prevent damage to the pump, we only allow the pump to run for a maximum time.
+  # The relay will be reset when the main power supply drops under it's threshold, I should make it a timer to be safe.
   - id: limited_time_pump
     mode: restart     # Pump will be kept on during time
                       # the latest time the script is executed
