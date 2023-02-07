@@ -17,6 +17,11 @@ Relays are LC Tech UART controlled from AliExpress. They are designed to use an 
 Two reed switches in series sense when the tanks are in a state that we can pump from the lower to the upper tank.
 Pulldown ensures there is adequate difference between on and off states.
 
+## Data Graph
+Showing one sunny, and one cloudy day.
+![Graph showing one sunny, and one cloudy day](Screenshot%202023-02-08%20at%209.18.13%20AM.png)
+
+
 ## Internalls of Prototype.
 
 Have has no issues so far, I expect insect infestation to cause failure since the bottom of the enclosure is open.
@@ -37,3 +42,4 @@ However it has some heat and keeps relatively dry.
 I think ill leave it like this until it fails and fix as needed.
 
 ![ESPHome Basic Solar Powered Mud Kitchen Installed](IMG_2279.jpg)
+
