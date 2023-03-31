@@ -17,6 +17,7 @@ ota:
   password: !secret ota_password
 
 wifi:
+  # use_address: mud-kitchen-test.local
   networks:
   - ssid: !secret wifi_ssid
     password: !secret wifi_password
@@ -77,7 +78,7 @@ switch:
           id: uart1
           data: [0xA0, 0x02, 0x00, 0xA2]
 
-  # Pup to move water from the lower catch tank to the upper gravity feeding tank.
+  # Pump to move water from the lower catch tank to the upper gravity feeding tank.
   - platform: template
     name: 'Mud Kitchen Pump'
     id: pump
@@ -111,6 +112,7 @@ sensor:
     attenuation: 11db
     pin: GPIO3
     name: "Mud Kitchen Battery"
+    id: battery_voltage
     update_interval: 5ms
     accuracy_decimals: 3
     filters:
@@ -121,7 +123,7 @@ sensor:
     on_value_range:
 
       # Provide power to pumps and lights above a voltage that indicate the battery is charged enough.
-      - above: 10.0
+      - above: 11.0
         then:
           - switch.turn_on: main_power
         
@@ -142,6 +144,7 @@ sensor:
     attenuation: 11db
     pin: GPIO5
     name: "Mud Kitchen Solar Panel"
+    id: charge_source_voltage
     update_interval: 5ms
     accuracy_decimals: 3
     filters:
@@ -149,23 +152,25 @@ sensor:
       - sliding_window_moving_average:
           window_size: 400
           send_every: 400
-    on_value_range:
-
-      # Charge source has more than this, start charging.
-      - above: 8
-        then:
-          - switch.turn_on: connect_solar_panel
-      
-      # Charge source has too much power, disconnect. This may need adjusting if we disconnect while we still need power.
-      # So far has been OK, but doesn't look like it has ever happened due to poor battery.
-      - above: 14
-        then:
-        - switch.turn_off: connect_solar_panel
-      
-      # Disconnect charger if we don't have charge power. This also saves charge by not powering the relay.
-      - below: 5
-        then:
-        - switch.turn_off: connect_solar_panel
+    on_value:
+      then:
+        if:
+          condition:
+            lambda: >-
+              float chargeSourceVoltage = id(charge_source_voltage).state;
+              float batteryVoltage = id(battery_voltage).state;
+              return (chargeSourceVoltage > batteryVoltage) && (batteryVoltage < 14);
+          then:
+            switch.turn_on: connect_solar_panel
+          else:
+            if:
+              condition:
+                lambda: >-
+                  float chargeSourceVoltage = id(charge_source_voltage).state;
+                  float batteryVoltage = id(battery_voltage).state;
+                  return (chargeSourceVoltage <= batteryVoltage) && (batteryVoltage < 14);
+              then:
+                switch.turn_off: connect_solar_panel
 
 
   # ADC to measure the voltage on the reed switch circuit.
@@ -213,4 +218,3 @@ script:
       - switch.turn_on: pump
       - delay: 2 hours
       - switch.turn_off: pump
-
