@@ -118,8 +118,8 @@ sensor:
     filters:
       - multiply: 15
       - sliding_window_moving_average:
-          window_size: 400
-          send_every: 400
+          window_size: 600
+          send_every: 600
     on_value_range:
 
       # Provide power to pumps and lights above a voltage that indicate the battery is charged enough.
@@ -128,15 +128,10 @@ sensor:
           - switch.turn_on: main_power
         
       # Remove power to pumps and lights under this voltage to prevent damaging discharge.
-      - below: 8.5
+      - below: 8.0
         then:
         - switch.turn_off: main_power
         - switch.turn_off: pump
-      
-      # Battery is overcharging, disconnecting charge source.
-      - above: 13.5
-        then:
-        - switch.turn_off: connect_solar_panel
 
   # ADC to measure the voltage from the solar panel, mainly used when disconnected from the battery.
   # NOTE: There is a diode between the solar panel and battery.
@@ -150,8 +145,8 @@ sensor:
     filters:
       - multiply: 15
       - sliding_window_moving_average:
-          window_size: 400
-          send_every: 400
+          window_size: 600
+          send_every: 600
     on_value:
       then:
         if:
@@ -159,18 +154,40 @@ sensor:
             lambda: >-
               float chargeSourceVoltage = id(charge_source_voltage).state;
               float batteryVoltage = id(battery_voltage).state;
-              return (chargeSourceVoltage > batteryVoltage) && (batteryVoltage < 14);
+              float maximumBatteryVoltage = 14;
+              float diodeDrop = 0.60;
+              bool enableCharging = (chargeSourceVoltage > (batteryVoltage + diodeDrop)) && (batteryVoltage < maximumBatteryVoltage);
+              ESP_LOGI("charge_source_voltage change", "Checking if charger should be connected...");
+              if (enableCharging) {
+                ESP_LOGI("charge_source_voltage change", "yes it should.");
+              }
+              return enableCharging;
           then:
-            switch.turn_on: connect_solar_panel
+            if:
+              condition:
+                switch.is_off: connect_solar_panel
+              then:
+                switch.turn_on: connect_solar_panel
           else:
             if:
               condition:
                 lambda: >-
                   float chargeSourceVoltage = id(charge_source_voltage).state;
                   float batteryVoltage = id(battery_voltage).state;
-                  return (chargeSourceVoltage <= batteryVoltage) && (batteryVoltage < 14);
+                  float maximumBatteryVoltage = 14;
+                  float diodeDrop = 0.62;
+                  bool off = (chargeSourceVoltage <= batteryVoltage) && (batteryVoltage < maximumBatteryVoltage);
+                  ESP_LOGI("charge_source_voltage change - else ", "Checking if charger should be disconnected...");
+                  if (off) {
+                    ESP_LOGI("charge_source_voltage change - else ", "no it shouldn't.");
+                  }
+                  return off;
               then:
-                switch.turn_off: connect_solar_panel
+                if:
+                  condition:
+                    switch.is_on: connect_solar_panel
+                  then:
+                    switch.turn_off: connect_solar_panel
 
 
   # ADC to measure the voltage on the reed switch circuit.
@@ -187,8 +204,8 @@ sensor:
     filters:
       - multiply: 15
       - sliding_window_moving_average:
-          window_size: 400
-          send_every: 400
+          window_size: 600
+          send_every: 600
     on_value_range:
 
       # Level sensor senses the top tank is low and the bottom one is high.
