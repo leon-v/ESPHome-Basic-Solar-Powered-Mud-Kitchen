@@ -1,14 +1,24 @@
 esphome:
   name: mud-kitchen
+  on_boot:
+    then:
+      - delay: 10s
+      - logger.log:
+          format: "Starting Relay Updater"
+          level: DEBUG
+      - script.execute: set_relays
 
 esp32:
   board: esp32-s2-saola-1 # Standard ESP32-S2 Board
   framework:
-    type: esp-idf # platformio doesn't seem to work very well for the S2 as of writing this.
-
+    #type: esp-idf # platformio doesn't seem to work very well for the S2 as of writing this.
+    type: arduino
+    
 # Enable logging
 logger:
-  hardware_uart: USB_CDC # This is to release a UART for the relay controller.
+  level: DEBUG
+  baud_rate: 0 # Disable 
+  #hardware_uart: USB_CDC # This is to release a UART for the relay controller.
 
 # Enable Home Assistant API
 api: # Usually i'd just ise MQTT, but I have been having good luck with this lately.
@@ -49,12 +59,16 @@ uart:
 
 switch:
 
+  - platform: restart
+    name: "Mud Kitchen Restart"
+
   # Relay that connects the solar panel to the battery.
   # I use normally open so all relays can be off while we wait for the sun to come out.
   - platform: template
     name: 'Mud Kitchen Connect Solar Panel'
     id: connect_solar_panel
     optimistic: true
+    #restore_mode: ALWAYS_OFF
     turn_on_action:
       - uart.write:
           id: uart1
@@ -69,6 +83,7 @@ switch:
     name: 'Mud Kitchen Main Power'
     id: main_power
     optimistic: true
+    restore_mode: ALWAYS_OFF
     turn_on_action:
       - uart.write:
           id: uart1
@@ -83,6 +98,7 @@ switch:
     name: 'Mud Kitchen Pump'
     id: pump
     optimistic: true
+    restore_mode: ALWAYS_OFF
     turn_on_action:
       - uart.write:
           id: uart2
@@ -95,7 +111,9 @@ switch:
   # Spare relay. Might use for play house fan or lights in the future.
   - platform: template
     name: 'Mud Kitchen Relay 4'
+    id: relay4
     optimistic: true
+    restore_mode: ALWAYS_OFF
     turn_on_action:
       - uart.write:
           id: uart2
@@ -123,14 +141,15 @@ sensor:
     on_value_range:
 
       # Provide power to pumps and lights above a voltage that indicate the battery is charged enough.
-      - above: 11.0
+      - above: 12.0
         then:
           - switch.turn_on: main_power
         
       # Remove power to pumps and lights under this voltage to prevent damaging discharge.
-      - below: 8.0
+      - below: 7.0
         then:
         - switch.turn_off: main_power
+        - delay: 200ms
         - switch.turn_off: pump
 
   # ADC to measure the voltage from the solar panel, mainly used when disconnected from the battery.
@@ -152,15 +171,33 @@ sensor:
         if:
           condition:
             lambda: >-
+              bool enableCharging = true;
+
               float chargeSourceVoltage = id(charge_source_voltage).state;
               float batteryVoltage = id(battery_voltage).state;
               float maximumBatteryVoltage = 14;
-              float diodeDrop = 0.60;
-              bool enableCharging = (chargeSourceVoltage > (batteryVoltage + diodeDrop)) && (batteryVoltage < maximumBatteryVoltage);
-              ESP_LOGI("charge_source_voltage change", "Checking if charger should be connected...");
-              if (enableCharging) {
-                ESP_LOGI("charge_source_voltage change", "yes it should.");
+
+              float minChargeVoltage = 16;
+              if (id(connect_solar_panel).state) {
+                minChargeVoltage = 4.0;
               }
+              ESP_LOGI("charge_source_voltage", "minChargeVoltage = %f", minChargeVoltage);
+
+              if (chargeSourceVoltage < minChargeVoltage){
+                ESP_LOGI("charge_source_voltage", "chargeSourceVoltage < minChargeVoltage");
+                enableCharging = false;
+              }
+
+              if (chargeSourceVoltage < batteryVoltage) {
+                ESP_LOGI("charge_source_voltage", "chargeSourceVoltage < batteryVoltage");
+                enableCharging = false;
+              }
+              
+              if (batteryVoltage > maximumBatteryVoltage) {
+                ESP_LOGI("charge_source_voltage", "batteryVoltage > maximumBatteryVoltage");
+                enableCharging = false;
+              }
+
               return enableCharging;
           then:
             if:
@@ -171,23 +208,13 @@ sensor:
           else:
             if:
               condition:
-                lambda: >-
-                  float chargeSourceVoltage = id(charge_source_voltage).state;
-                  float batteryVoltage = id(battery_voltage).state;
-                  float maximumBatteryVoltage = 14;
-                  float diodeDrop = 0.62;
-                  bool off = (chargeSourceVoltage <= batteryVoltage) && (batteryVoltage < maximumBatteryVoltage);
-                  ESP_LOGI("charge_source_voltage change - else ", "Checking if charger should be disconnected...");
-                  if (off) {
-                    ESP_LOGI("charge_source_voltage change - else ", "no it shouldn't.");
-                  }
-                  return off;
+                switch.is_on: connect_solar_panel
               then:
-                if:
-                  condition:
-                    switch.is_on: connect_solar_panel
-                  then:
-                    switch.turn_off: connect_solar_panel
+                - switch.turn_off: connect_solar_panel
+                - delay: 200ms
+                - switch.turn_off: main_power
+                - delay: 200ms
+                - switch.turn_off: pump
 
 
   # ADC to measure the voltage on the reed switch circuit.
@@ -235,3 +262,54 @@ script:
       - switch.turn_on: pump
       - delay: 2 hours
       - switch.turn_off: pump
+
+  # Some times these serial relays don't listen to the command, usually because they clash with other command.
+  # this will set the current state and trigger the command every 10 seconds
+  - id: set_relays
+    mode: restart
+    then:
+    - logger.log: "Setting relays"
+    - if:
+        condition:
+          switch.is_on: connect_solar_panel
+        then:
+          - switch.turn_on: connect_solar_panel
+          - logger.log: "connect_solar_panel turned on"
+        else:
+          - switch.turn_off: connect_solar_panel
+          - logger.log: "connect_solar_panel turned off"
+
+    - if:
+        condition:
+          switch.is_on: main_power
+        then:
+          - switch.turn_on: main_power
+          - logger.log: "main_power turned on"
+        else:
+          - switch.turn_off: main_power
+          - logger.log: "main_power turned off"
+
+    - if:
+        condition:
+          switch.is_on: pump
+        then:
+          - switch.turn_on: pump
+          - logger.log: "pump turned on"
+        else:
+          - switch.turn_off: pump
+          - logger.log: "pump turned off"
+
+    - if:
+        condition:
+          switch.is_on: relay4
+        then:
+          - switch.turn_on: relay4
+          - logger.log: "relay4 turned on"
+        else:
+          - switch.turn_off: relay4
+          - logger.log: "relay4 turned off"
+
+    - delay: 10s
+
+    # Call this script again after 10 seconds
+    - script.execute: set_relays
